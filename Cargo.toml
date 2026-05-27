@@ -1,0 +1,9 @@
+[package]
+name = "serde_dotenv"
+version = "0.1.0"
+edition = "2024"
+homepage = "https://github.com/rysndavjd/serde_dotenv"
+repository = "https://github.com/rysndavjd/serde_dotenv"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

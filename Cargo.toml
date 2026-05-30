@@ -7,3 +7,8 @@ repository = "https://github.com/rysndavjd/serde_dotenv"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+serde = { version = "1.0.228", default-features = false, features = ["alloc"]}
+
+[features]
+default = ["std"]
+std = ["serde/std"]

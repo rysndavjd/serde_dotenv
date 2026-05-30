@@ -92,11 +92,19 @@ impl<'de> Visitor<'de> for VarVisitor {
             return Err(E::invalid_length(0, &self));
         }
 
-        if !i.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        if i.chars()
+            .nth(0)
+            .expect("should not be empty")
+            .is_ascii_digit()
+            || !i.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
             return Err(E::invalid_value(Unexpected::Str(i), &self));
         }
 
-        if !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        if !v
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\'' || c == '\"')
+        {
             return Err(E::invalid_value(Unexpected::Str(v), &self));
         }
 

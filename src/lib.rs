@@ -10,3 +10,8 @@ extern crate alloc;
 
 mod de;
 mod ser;
+
+pub use crate::{
+    de::{VarsDeserializer, from_str},
+    error::Error,
+};

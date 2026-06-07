@@ -7,7 +7,10 @@ repository = "https://github.com/rysndavjd/serde_dotenv"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+indexmap = "2.14.0"
+itoa = "1.0.18"
 serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"]}
+zmij = "1.0.21"
 
 [features]
 default = ["std"]

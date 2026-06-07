@@ -1,16 +1,8 @@
-use crate::{error::Error, std::mem::take};
+use crate::{common::QuoteState, error::Error, std::mem::take};
 use alloc::borrow::Cow;
 use serde::de::{Deserialize, DeserializeSeed, Deserializer, MapAccess, value::StrDeserializer};
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
-enum QuoteState {
-    #[default]
-    Unquoted,
-    SingleQuoted,
-    DoubleQuoted,
-}
-
-fn parse_str<'a>(v: &'a str) -> Result<(&'a str, Cow<'a, str>), Error> {
+pub fn parse_str<'a>(v: &'a str) -> Result<(&'a str, Cow<'a, str>), Error> {
     if v.is_empty() {
         return Err(Error::EmptyString);
     }
@@ -23,8 +15,8 @@ fn parse_str<'a>(v: &'a str) -> Result<(&'a str, Cow<'a, str>), Error> {
         Some((_, c)) if !(c.is_ascii_alphabetic() || c == '_') && c.is_ascii_digit() => {
             return Err(Error::IdentifierStartsWithDigit);
         }
-        Some((_, c)) if !(c.is_ascii_alphabetic() || c == '_') => {
-            return Err(Error::InvalidIdentifier { char: c, index: 0 });
+        Some((i, c)) if !(c.is_ascii_alphabetic() || c == '_') => {
+            return Err(Error::InvalidIdentifier { char: c, index: i });
         }
         None => return Err(Error::EmptyIdentifier),
         _ => (),

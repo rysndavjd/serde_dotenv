@@ -8,10 +8,12 @@ extern crate core as std;
 
 extern crate alloc;
 
+mod common;
 mod de;
 mod ser;
 
 pub use crate::{
     de::{VarsDeserializer, from_str},
     error::Error,
+    ser::VarsSerializer,
 };

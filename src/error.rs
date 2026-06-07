@@ -1,26 +1,60 @@
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Error {
+    /// Deserialization method used is not supported
     UnsupportedDeserialization,
+    /// Serialization method used is not supported
+    UnsupportedSerialization,
+    /// String is empty
     EmptyString,
+    /// Missing `=` sign separator
     MissingEqualSeparator,
+    /// Identfifier is empty
     EmptyIdentifier,
+    /// Identifier starts with a digit
     IdentifierStartsWithDigit,
-    InvalidIdentifier { char: char, index: usize },
-    ValueUnterminatedSingleQuote { index: usize },
-    ValueUnterminatedDoubleQuote { index: usize },
-    ValueUnescapedShellChar { char: char, index: usize },
+    /// Identifier contains a value that is not an ascii alphabetical character or `_`
+    InvalidIdentifier {
+        char: char,
+        index: usize,
+    },
+    /// Value contains an unterminated `'`
+    ValueUnterminatedSingleQuote {
+        index: usize,
+    },
+    /// Value contains an unterminated `"`
+    ValueUnterminatedDoubleQuote {
+        index: usize,
+    },
+    /// Value contains unescaped special shell character (`|`, `&`, `;`, `<`, `>`, `(`, `)`, `` ` ``, `\`)
+    ValueUnescapedShellChar {
+        char: char,
+        index: usize,
+    },
+    /// Value has a dangling escape character `\`
     ValueDanglingEscape,
+    /// Value is not a [`bool`]
     ValueNotBoolean,
+    /// Value is not a [`i8`]
     ValueNotI8,
+    /// Value is not a [`i16`]
     ValueNotI16,
+    /// Value is not a [`i32`]
     ValueNotI32,
+    /// Value is not a [`i64`]
     ValueNotI64,
+    /// Value is not a [`u8`]
     ValueNotU8,
+    /// Value is not a [`u16`]
     ValueNotU16,
+    /// Value is not a [`u32`]
     ValueNotU32,
+    /// Value is not a [`u64`]
     ValueNotU64,
+    /// Value is not a [`f32`]
     ValueNotF32,
+    /// Value is not a [`f64`]
     ValueNotF64,
+    /// Value is not a [`unit`]
     ValueNotUnit,
     Custom(String),
 }
@@ -30,6 +64,9 @@ impl crate::std::fmt::Display for Error {
         match self {
             Error::UnsupportedDeserialization => {
                 write!(f, "Unsupported deserialization method")
+            }
+            Error::UnsupportedSerialization => {
+                write!(f, "Unsupported serialization method")
             }
             Error::EmptyString => write!(f, "string is empty"),
             Error::MissingEqualSeparator => {

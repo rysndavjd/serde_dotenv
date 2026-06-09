@@ -1,6 +1,6 @@
 use crate::{common::QuoteState, error::Error, std::mem::take};
 use alloc::borrow::Cow;
-use serde::de::{Deserialize, DeserializeSeed, Deserializer, MapAccess, value::StrDeserializer};
+use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, value::StrDeserializer};
 
 pub fn parse_str<'a>(v: &'a str) -> Result<(&'a str, Cow<'a, str>), Error> {
     if v.is_empty() {
@@ -108,19 +108,19 @@ pub struct ValueDeserializer<'a> {
     raw: Cow<'a, str>,
 }
 
-impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
+impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     type Error = Error;
 
     fn deserialize_any<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let bool = match self.raw.as_ref() {
             "true" => true,
@@ -133,7 +133,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let i8 = self.raw.parse::<i8>().map_err(|_| Error::ValueNotI8)?;
 
@@ -142,7 +142,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let i16 = self.raw.parse::<i16>().map_err(|_| Error::ValueNotI16)?;
 
@@ -151,7 +151,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let i32 = self.raw.parse::<i32>().map_err(|_| Error::ValueNotI32)?;
 
@@ -160,7 +160,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let i64 = self.raw.parse::<i64>().map_err(|_| Error::ValueNotI64)?;
 
@@ -169,7 +169,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let u8 = self.raw.parse::<u8>().map_err(|_| Error::ValueNotU8)?;
 
@@ -178,7 +178,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let u16 = self.raw.parse::<u16>().map_err(|_| Error::ValueNotU16)?;
 
@@ -187,7 +187,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let u32 = self.raw.parse::<u32>().map_err(|_| Error::ValueNotU32)?;
 
@@ -196,7 +196,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let u64 = self.raw.parse::<u64>().map_err(|_| Error::ValueNotU64)?;
 
@@ -205,7 +205,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let f32 = self.raw.parse::<f32>().map_err(|_| Error::ValueNotF32)?;
 
@@ -214,7 +214,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         let f64 = self.raw.parse::<f64>().map_err(|_| Error::ValueNotF64)?;
 
@@ -223,14 +223,14 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_char<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         match &self.raw {
             Cow::Borrowed(s) => visitor.visit_borrowed_str(s),
@@ -240,7 +240,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         match &mut self.raw {
             Cow::Borrowed(s) => visitor.visit_string(s.to_owned()),
@@ -250,21 +250,21 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_bytes<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_byte_buf<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         if self.raw.is_empty() {
             return visitor.visit_none();
@@ -275,7 +275,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
 
     fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         if self.raw.is_empty() {
             return visitor.visit_unit();
@@ -290,7 +290,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
         visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_unit(visitor)
     }
@@ -301,21 +301,21 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
         visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_seq<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_tuple<V>(self, _: usize, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
@@ -327,14 +327,14 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
         _: V,
     ) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_map<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
@@ -346,7 +346,7 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
         _: V,
     ) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
@@ -358,37 +358,37 @@ impl<'de> Deserializer<'de> for &mut ValueDeserializer<'de> {
         _: V,
     ) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_identifier<V>(self, _: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         Err(Error::UnsupportedDeserialization)
     }
 
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
-        V: serde::de::Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         visitor.visit_unit()
     }
 }
 
-pub struct VarsDeserializer<'a> {
+pub struct Deserializer<'a> {
     input: &'a str,
 }
 
-impl<'a> VarsDeserializer<'a> {
+impl<'a> Deserializer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self { input }
     }
 }
 
-impl<'de> Deserializer<'de> for &mut VarsDeserializer<'de> {
+impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     type Error = Error;
 
     fn deserialize_any<V>(self, _: V) -> Result<V::Value, Self::Error>
@@ -660,7 +660,7 @@ impl<'de> MapAccess<'de> for VarMapAccess<'de> {
 }
 
 pub fn from_str<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T, Error> {
-    T::deserialize(&mut VarsDeserializer::new(input))
+    T::deserialize(&mut Deserializer::new(input))
 }
 
 #[cfg(test)]

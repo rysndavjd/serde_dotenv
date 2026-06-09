@@ -13,7 +13,7 @@ mod de;
 mod ser;
 
 pub use crate::{
-    de::{VarsDeserializer, from_str},
+    de::{Deserializer, from_str},
     error::Error,
-    ser::VarsSerializer,
+    ser::{Serializer, to_string, to_vec, to_writer},
 };

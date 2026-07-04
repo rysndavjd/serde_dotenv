@@ -1,111 +1,124 @@
-use crate::{common::QuoteState, error::Error, std::mem::take};
-use alloc::borrow::Cow;
-use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, value::StrDeserializer};
+use crate::{
+    common::State,
+    error::Error,
+    std::{iter::Map, mem::take, slice::SplitInclusive, str::from_utf8},
+};
+use alloc::{
+    borrow::{Cow, ToOwned},
+    string::String,
+    vec::Vec,
+};
+use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, value::BytesDeserializer};
 
-pub fn parse_str<'a>(v: &'a str) -> Result<(&'a str, Cow<'a, str>), Error> {
+fn parse_line<'a>(v: &'a [u8]) -> Result<(&'a [u8], Cow<'a, [u8]>), Error> {
     if v.is_empty() {
         return Err(Error::EmptyString);
     }
 
-    let (ident, val) = v.split_once('=').ok_or(Error::MissingEqualSeparator)?;
+    let equal_pos = v
+        .iter()
+        .position(|b| b == &b'=')
+        .ok_or(Error::MissingEqualSeparator)?;
 
-    let mut ident_iter = ident.char_indices();
+    let key = &v[..equal_pos];
+    let val = &v[(equal_pos + 1)..];
 
-    match ident_iter.next() {
-        Some((_, c)) if !(c.is_ascii_alphabetic() || c == '_') && c.is_ascii_digit() => {
+    let mut key_iter = key.iter().enumerate();
+
+    match key_iter.next() {
+        Some((_, c)) if c.is_ascii_digit() => {
             return Err(Error::IdentifierStartsWithDigit);
         }
-        Some((i, c)) if !(c.is_ascii_alphabetic() || c == '_') => {
-            return Err(Error::InvalidIdentifier { char: c, index: i });
+        Some((i, c)) if !(c.is_ascii_alphabetic() || c == &b'_') => {
+            return Err(Error::InvalidIdentifier { index: i });
         }
         None => return Err(Error::EmptyIdentifier),
         _ => (),
     }
 
-    for (i, c) in ident_iter {
-        if !(c.is_ascii_alphanumeric() || c == '_') {
-            return Err(Error::InvalidIdentifier { char: c, index: i });
+    for (i, c) in key_iter {
+        if !(c.is_ascii_alphanumeric() || c == &b'_') {
+            return Err(Error::InvalidIdentifier { index: i });
         }
     }
 
-    if !val.contains(['"', '\'', '\\', '|', '&', ';', '<', '>', '(', ')', '`']) {
-        return Ok((ident, Cow::Borrowed(val)));
+    if !val.iter().any(|b| {
+        b == &b'"'
+            || b == &b'\''
+            || b == &b'\\'
+            || b == &b'|'
+            || b == &b'&'
+            || b == &b';'
+            || b == &b'<'
+            || b == &b'>'
+            || b == &b'('
+            || b == &b')'
+            || b == &b'`'
+            || b == &b' '
+            || b == &b'\t'
+    }) {
+        return Ok((key, Cow::Borrowed(val)));
     }
 
-    let mut output = String::new();
-
-    let mut quote = QuoteState::Unquoted;
-    let mut quote_pos = 0usize;
-
-    let mut chars = val.char_indices().peekable();
+    let mut output: Vec<u8> = Vec::new();
+    let chars = &mut val.iter().enumerate();
+    let mut state = State::Unquoted;
 
     while let Some((i, c)) = chars.next() {
-        if c == '\\' && quote != QuoteState::SingleQuoted {
+        if c == &b'\\' && state != State::SingleQuoted {
             match chars.next() {
                 Some((_, escaped_char)) => {
-                    output.push(escaped_char);
+                    output.push(*escaped_char);
                     continue;
                 }
                 None => return Err(Error::ValueDanglingEscape),
             }
         }
 
-        match quote {
-            QuoteState::Unquoted => match c {
-                '\'' => {
-                    quote_pos = i;
-                    quote = QuoteState::SingleQuoted;
+        match state {
+            State::Unquoted => match c {
+                &b'\'' => {
+                    state = State::SingleQuoted;
                     continue;
                 }
-                '"' => {
-                    quote_pos = i;
-                    quote = QuoteState::DoubleQuoted;
+                &b'"' => {
+                    state = State::DoubleQuoted;
                     continue;
                 }
-                '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '\\' => {
-                    return Err(Error::ValueUnescapedShellChar { char: c, index: i });
+                &b'|' | &b'&' | &b';' | &b'<' | &b'>' | &b'(' | &b')' | &b'`' | &b' ' | &b'\t' => {
+                    return Err(Error::ValueUnescapedShellChar { index: i });
                 }
                 _ => {}
             },
-            QuoteState::SingleQuoted if c == '\'' => {
-                debug_assert!(i > quote_pos);
-
-                quote = QuoteState::Unquoted;
-                quote_pos = 0;
+            State::SingleQuoted if c == &b'\'' => {
+                state = State::Unquoted;
                 continue;
             }
-            QuoteState::DoubleQuoted if c == '"' => {
-                debug_assert!(i > quote_pos);
-
-                quote = QuoteState::Unquoted;
-                quote_pos = 0;
+            State::DoubleQuoted if c == &b'"' => {
+                state = State::Unquoted;
                 continue;
             }
             _ => (),
         }
 
-        output.push(c);
+        output.push(*c);
     }
 
-    match quote {
-        QuoteState::SingleQuoted => {
-            return Err(Error::ValueUnterminatedSingleQuote {
-                index: (ident.len() + 1) + quote_pos,
-            });
+    match state {
+        State::SingleQuoted => {
+            return Err(Error::ValueUnterminatedSingleQuote);
         }
-        QuoteState::DoubleQuoted => {
-            return Err(Error::ValueUnterminatedDoubleQuote {
-                index: (ident.len() + 1) + quote_pos,
-            });
+        State::DoubleQuoted => {
+            return Err(Error::ValueUnterminatedDoubleQuote);
         }
         _ => (),
     }
 
-    Ok((ident, Cow::Owned(output)))
+    Ok((key, Cow::Owned(output)))
 }
 
 pub struct ValueDeserializer<'a> {
-    raw: Cow<'a, str>,
+    raw: Cow<'a, [u8]>,
 }
 
 impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
@@ -123,8 +136,8 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
         V: de::Visitor<'de>,
     {
         let bool = match self.raw.as_ref() {
-            "true" => true,
-            "false" => false,
+            b"true" => true,
+            b"false" => false,
             _ => return Err(Error::ValueNotBoolean),
         };
 
@@ -135,7 +148,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let i8 = self.raw.parse::<i8>().map_err(|_| Error::ValueNotI8)?;
+        let i8 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotI8)?;
 
         visitor.visit_i8(i8)
     }
@@ -144,7 +157,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let i16 = self.raw.parse::<i16>().map_err(|_| Error::ValueNotI16)?;
+        let i16 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotI16)?;
 
         visitor.visit_i16(i16)
     }
@@ -153,7 +166,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let i32 = self.raw.parse::<i32>().map_err(|_| Error::ValueNotI32)?;
+        let i32 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotI32)?;
 
         visitor.visit_i32(i32)
     }
@@ -162,7 +175,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let i64 = self.raw.parse::<i64>().map_err(|_| Error::ValueNotI64)?;
+        let i64 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotI64)?;
 
         visitor.visit_i64(i64)
     }
@@ -171,7 +184,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let u8 = self.raw.parse::<u8>().map_err(|_| Error::ValueNotU8)?;
+        let u8 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotU8)?;
 
         visitor.visit_u8(u8)
     }
@@ -180,7 +193,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let u16 = self.raw.parse::<u16>().map_err(|_| Error::ValueNotU16)?;
+        let u16 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotU16)?;
 
         visitor.visit_u16(u16)
     }
@@ -189,7 +202,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let u32 = self.raw.parse::<u32>().map_err(|_| Error::ValueNotU32)?;
+        let u32 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotU32)?;
 
         visitor.visit_u32(u32)
     }
@@ -198,7 +211,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let u64 = self.raw.parse::<u64>().map_err(|_| Error::ValueNotU64)?;
+        let u64 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotU64)?;
 
         visitor.visit_u64(u64)
     }
@@ -207,7 +220,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let f32 = self.raw.parse::<f32>().map_err(|_| Error::ValueNotF32)?;
+        let f32 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotF32)?;
 
         visitor.visit_f32(f32)
     }
@@ -216,7 +229,7 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        let f64 = self.raw.parse::<f64>().map_err(|_| Error::ValueNotF64)?;
+        let f64 = lexical_core::parse(&self.raw).map_err(|_| Error::ValueNotF64)?;
 
         visitor.visit_f64(f64)
     }
@@ -233,8 +246,10 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
         V: de::Visitor<'de>,
     {
         match &self.raw {
-            Cow::Borrowed(s) => visitor.visit_borrowed_str(s),
-            Cow::Owned(s) => visitor.visit_str(s),
+            Cow::Borrowed(s) => {
+                visitor.visit_borrowed_str(from_utf8(s).map_err(|_| Error::InvaildUtf8)?)
+            }
+            Cow::Owned(s) => visitor.visit_str(from_utf8(s).map_err(|_| Error::InvaildUtf8)?),
         }
     }
 
@@ -243,23 +258,33 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
         V: de::Visitor<'de>,
     {
         match &mut self.raw {
-            Cow::Borrowed(s) => visitor.visit_string(s.to_owned()),
-            Cow::Owned(s) => visitor.visit_string(take(s)),
+            Cow::Borrowed(s) => {
+                visitor.visit_string(from_utf8(s).map_err(|_| Error::InvaildUtf8)?.to_owned())
+            }
+            Cow::Owned(s) => {
+                visitor.visit_string(String::from_utf8(s.to_vec()).map_err(|_| Error::InvaildUtf8)?)
+            }
         }
     }
 
-    fn deserialize_bytes<V>(self, _: V) -> Result<V::Value, Self::Error>
+    fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
     {
-        Err(Error::UnsupportedDeserialization)
+        match &self.raw {
+            Cow::Borrowed(b) => visitor.visit_borrowed_bytes(b),
+            Cow::Owned(b) => visitor.visit_bytes(b),
+        }
     }
 
-    fn deserialize_byte_buf<V>(self, _: V) -> Result<V::Value, Self::Error>
+    fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
     {
-        Err(Error::UnsupportedDeserialization)
+        match &mut self.raw {
+            Cow::Borrowed(b) => visitor.visit_borrowed_bytes(b),
+            Cow::Owned(b) => visitor.visit_byte_buf(take(b)),
+        }
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -379,11 +404,11 @@ impl<'de> de::Deserializer<'de> for &mut ValueDeserializer<'de> {
 }
 
 pub struct Deserializer<'a> {
-    input: &'a str,
+    input: &'a [u8],
 }
 
 impl<'a> Deserializer<'a> {
-    pub fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a [u8]) -> Self {
         Self { input }
     }
 }
@@ -610,15 +635,66 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 }
 
+struct ByteLines<'a>(Map<SplitInclusive<'a, u8, fn(&u8) -> bool>, fn(&'a [u8]) -> &'a [u8]>);
+
+impl<'a> ByteLines<'a> {
+    fn is_newline(c: &u8) -> bool {
+        c == &b'\n'
+    }
+
+    fn strip_newlines(line: &[u8]) -> &[u8] {
+        let Some(line) = line.strip_suffix(b"\n") else {
+            return line;
+        };
+        let Some(line) = line.strip_suffix(b"\r") else {
+            return line;
+        };
+        line
+    }
+
+    fn new(s: &'a [u8]) -> ByteLines<'a> {
+        ByteLines(
+            s.split_inclusive(ByteLines::is_newline as fn(&u8) -> bool)
+                .map(ByteLines::strip_newlines as fn(&'a [u8]) -> &'a [u8]),
+        )
+    }
+}
+
+impl<'a> Iterator for ByteLines<'a> {
+    type Item = &'a [u8];
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a [u8]> {
+        self.0.next()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<&'a [u8]> {
+        self.next_back()
+    }
+}
+
+impl<'a> DoubleEndedIterator for ByteLines<'a> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a [u8]> {
+        self.0.next_back()
+    }
+}
+
 struct VarMapAccess<'a> {
-    lines: crate::std::str::Lines<'a>,
-    current_value: Option<Cow<'a, str>>,
+    lines: ByteLines<'a>,
+    current_value: Option<Cow<'a, [u8]>>,
 }
 
 impl<'a> VarMapAccess<'a> {
-    fn new(input: &'a str) -> Self {
-        Self {
-            lines: input.lines(),
+    pub fn new(s: &'a [u8]) -> Self {
+        VarMapAccess {
+            lines: ByteLines::new(s),
             current_value: None,
         }
     }
@@ -632,16 +708,16 @@ impl<'de> MapAccess<'de> for VarMapAccess<'de> {
         K: DeserializeSeed<'de>,
     {
         for line in self.lines.by_ref() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
+            let trimmed = line.trim_ascii();
+            if trimmed.is_empty() || trimmed.starts_with(b"#") {
                 continue;
             }
 
-            let (key, val) = parse_str(trimmed)?;
+            let (key, val) = parse_line(trimmed)?;
 
             self.current_value = Some(val);
 
-            return seed.deserialize(StrDeserializer::new(key)).map(Some);
+            return seed.deserialize(BytesDeserializer::new(key)).map(Some);
         }
         Ok(None)
     }
@@ -660,59 +736,84 @@ impl<'de> MapAccess<'de> for VarMapAccess<'de> {
 }
 
 pub fn from_str<'de, T: Deserialize<'de>>(input: &'de str) -> Result<T, Error> {
+    T::deserialize(&mut Deserializer::new(input.as_bytes()))
+}
+
+pub fn from_bytes<'de, T: Deserialize<'de>>(input: &'de [u8]) -> Result<T, Error> {
     T::deserialize(&mut Deserializer::new(input))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, parse_str};
+    use std::{println, string::String};
+
+    use serde::Deserialize;
+
+    use crate::{de::from_bytes, from_str};
+
+    use super::{Error, parse_line};
 
     #[test]
     fn invalid_str() {
-        assert_eq!(parse_str(""), Err(Error::EmptyString));
+        assert_eq!(parse_line(b""), Err(Error::EmptyString));
         assert_eq!(
-            parse_str("just some string"),
+            parse_line(b"just some string"),
             Err(Error::MissingEqualSeparator)
         );
-        assert_eq!(parse_str("=value"), Err(Error::EmptyIdentifier));
-        assert_eq!(parse_str("1=value"), Err(Error::IdentifierStartsWithDigit));
+        assert_eq!(parse_line(b"=value"), Err(Error::EmptyIdentifier));
         assert_eq!(
-            parse_str("❌=❓"),
-            Err(Error::InvalidIdentifier {
-                char: '❌',
-                index: 0
-            })
+            parse_line(b"1=value"),
+            Err(Error::IdentifierStartsWithDigit)
+        );
+        assert_eq!(
+            parse_line(b"\xE2\x9D\x8C=\xE2\x9D\x93"),
+            Err(Error::InvalidIdentifier { index: 0 })
+        );
+        assert_eq!(
+            parse_line(b"value='Hello World"),
+            Err(Error::ValueUnterminatedSingleQuote)
+        );
+        assert_eq!(
+            parse_line(b"Identifier=Hello\\ World\'"),
+            Err(Error::ValueUnterminatedSingleQuote)
+        );
+        assert_eq!(
+            parse_line(b"Identifier=\'Hello\'\\ \'World"),
+            Err(Error::ValueUnterminatedSingleQuote)
         );
 
         assert_eq!(
-            parse_str("value=\'Hello World"),
-            Err(Error::ValueUnterminatedSingleQuote { index: 6 })
+            parse_line(b"Identifier=\"Hello World"),
+            Err(Error::ValueUnterminatedDoubleQuote)
         );
         assert_eq!(
-            parse_str("Identifier=Hello World\'"),
-            Err(Error::ValueUnterminatedSingleQuote { index: 22 })
+            parse_line(b"Identifier=Hello\\ World\""),
+            Err(Error::ValueUnterminatedDoubleQuote)
         );
         assert_eq!(
-            parse_str("Identifier=\'Hello\' \'World"),
-            Err(Error::ValueUnterminatedSingleQuote { index: 19 })
-        );
-
-        assert_eq!(
-            parse_str("Identifier=\"Hello World"),
-            Err(Error::ValueUnterminatedDoubleQuote { index: 11 })
-        );
-        assert_eq!(
-            parse_str("Identifier=Hello World\""),
-            Err(Error::ValueUnterminatedDoubleQuote { index: 22 })
-        );
-        assert_eq!(
-            parse_str("Identifier=\"Hello\" \"World"),
-            Err(Error::ValueUnterminatedDoubleQuote { index: 19 })
+            parse_line(b"Identifier=\"Hello\"\\ \"World"),
+            Err(Error::ValueUnterminatedDoubleQuote)
         );
 
         assert_eq!(
-            parse_str("Identifier=Hello\\"),
+            parse_line(b"Identifier=Hello\\"),
             Err(Error::ValueDanglingEscape)
         );
+    }
+
+    #[test]
+    fn deserialize() {
+        #[derive(Deserialize, Debug)]
+        struct Test {
+            a: String,
+            b: String,
+            c: u8,
+        }
+
+        let t: Test = from_str("a=whata\nb=whatb\nc=12").unwrap();
+        let b: Test = from_bytes(b"a=bytes\nb=0xFFFF\nc=12").unwrap();
+
+        println!("{:?}", t);
+        println!("{:?}", b);
     }
 }

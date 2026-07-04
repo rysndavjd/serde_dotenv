@@ -1,11 +1,12 @@
-use crate::{common::QuoteState, error::Error};
-use alloc::borrow::Cow;
+use crate::{common::State, error::Error, std::num::FpCategory};
+use alloc::{borrow::Cow, string::String, vec::Vec};
+use lexical_core::FormattedSize;
 use serde::ser::{self, Impossible, Serialize};
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "writer"))]
 use std::io::Write;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "no_std", feature = "writer"))]
 use embedded_io::Write;
 
 pub fn validate_value<'a>(val: &'a str) -> Result<Cow<'a, str>, Error> {
@@ -15,13 +16,13 @@ pub fn validate_value<'a>(val: &'a str) -> Result<Cow<'a, str>, Error> {
 
     let mut output = String::new();
 
-    let mut quote = QuoteState::Unquoted;
+    let mut state = State::Unquoted;
     let mut quote_pos = 0usize;
 
     let mut chars = val.char_indices().peekable();
 
     while let Some((i, c)) = chars.next() {
-        if c == '\\' && quote != QuoteState::SingleQuoted {
+        if c == '\\' && state != State::SingleQuoted {
             match chars.next() {
                 Some((_, escaped_char)) => {
                     output.push(c);
@@ -32,31 +33,31 @@ pub fn validate_value<'a>(val: &'a str) -> Result<Cow<'a, str>, Error> {
             }
         }
 
-        match quote {
-            QuoteState::Unquoted => match c {
+        match state {
+            State::Unquoted => match c {
                 '\'' => {
                     quote_pos = i;
-                    quote = QuoteState::SingleQuoted;
+                    state = State::SingleQuoted;
                 }
                 '"' => {
                     quote_pos = i;
-                    quote = QuoteState::DoubleQuoted;
+                    state = State::DoubleQuoted;
                 }
                 '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '\\' => {
-                    return Err(Error::ValueUnescapedShellChar { char: c, index: i });
+                    return Err(Error::ValueUnescapedShellChar { index: i });
                 }
                 _ => {}
             },
-            QuoteState::SingleQuoted if c == '\'' => {
+            State::SingleQuoted if c == '\'' => {
                 debug_assert!(i > quote_pos);
 
-                quote = QuoteState::Unquoted;
+                state = State::Unquoted;
                 quote_pos = 0;
             }
-            QuoteState::DoubleQuoted if c == '"' => {
+            State::DoubleQuoted if c == '"' => {
                 debug_assert!(i > quote_pos);
 
-                quote = QuoteState::Unquoted;
+                state = State::Unquoted;
                 quote_pos = 0;
             }
             _ => (),
@@ -65,12 +66,12 @@ pub fn validate_value<'a>(val: &'a str) -> Result<Cow<'a, str>, Error> {
         output.push(c);
     }
 
-    match quote {
-        QuoteState::SingleQuoted => {
-            return Err(Error::ValueUnterminatedSingleQuote { index: quote_pos });
+    match state {
+        State::SingleQuoted => {
+            return Err(Error::ValueUnterminatedSingleQuote);
         }
-        QuoteState::DoubleQuoted => {
-            return Err(Error::ValueUnterminatedDoubleQuote { index: quote_pos });
+        State::DoubleQuoted => {
+            return Err(Error::ValueUnterminatedDoubleQuote);
         }
         _ => (),
     }
@@ -271,7 +272,7 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first {
-            self.ser.writer.write_all(b"\n").unwrap();
+            self.ser.writer.write_all(b"\n")?;
         }
         self.first = false;
         key.serialize(MapKeySerializer { ser: self.ser })
@@ -281,7 +282,7 @@ where
     where
         T: ?Sized + Serialize,
     {
-        self.ser.writer.write_all(b"=").unwrap();
+        self.ser.writer.write_all(b"=")?;
         value.serialize(&mut *self.ser)?;
         Ok(())
     }
@@ -351,103 +352,117 @@ where
         } else {
             b"false" as &[u8]
         };
-        self.writer.write_all(s).unwrap();
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; i8::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; i16::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; i32::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; i64::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_i128(self, v: i128) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; i128::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; u8::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; u16::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; u32::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; u64::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_u128(self, v: u128) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = itoa::Buffer::new();
-        let s = buffer.format(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        let mut buf = [0u8; u128::FORMATTED_SIZE_DECIMAL];
+        let s = lexical_core::write(v, &mut buf);
+        self.writer.write_all(s)?;
 
         Ok(())
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = zmij::Buffer::new();
-        let s = buffer.format_finite(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        match v.classify() {
+            FpCategory::Nan | FpCategory::Infinite => {
+                return Err(Error::FloatNotFinite);
+            }
+            _ => {
+                let mut buf = [0u8; f32::FORMATTED_SIZE_DECIMAL];
+                let s = lexical_core::write(v, &mut buf);
+                self.writer.write_all(s)?;
+            }
+        }
 
         Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        let mut buffer = zmij::Buffer::new();
-        let s = buffer.format_finite(v);
-        self.writer.write_all(s.as_bytes()).unwrap();
+        match v.classify() {
+            FpCategory::Nan | FpCategory::Infinite => {
+                return Err(Error::FloatNotFinite);
+            }
+            _ => {
+                let mut buf = [0u8; f64::FORMATTED_SIZE_DECIMAL];
+                let s = lexical_core::write(v, &mut buf);
+                self.writer.write_all(s)?;
+            }
+        }
 
         Ok(())
     }
@@ -459,7 +474,7 @@ where
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
         let value = validate_value(v)?;
-        self.writer.write_all(value.as_bytes()).unwrap();
+        self.writer.write_all(value.as_bytes())?;
 
         Ok(())
     }
@@ -518,7 +533,7 @@ where
         T: ?Sized + serde::Serialize,
     {
         self.serialize_str(variant)?;
-        self.writer.write_all(b"=").unwrap();
+        self.writer.write_all(b"=")?;
         value.serialize(&mut *self)?;
         Ok(())
     }
@@ -575,6 +590,7 @@ where
     }
 }
 
+#[cfg(feature = "writer")]
 pub fn to_writer<W, T>(writer: W, value: &T) -> Result<(), Error>
 where
     W: Write,
@@ -584,6 +600,7 @@ where
     value.serialize(&mut ser)
 }
 
+#[cfg(feature = "writer")]
 pub fn to_vec<T>(value: &T) -> Result<Vec<u8>, Error>
 where
     T: ?Sized + Serialize,
@@ -593,6 +610,7 @@ where
     Ok(writer)
 }
 
+#[cfg(feature = "writer")]
 pub fn to_string<T>(value: &T) -> Result<String, Error>
 where
     T: ?Sized + Serialize,
@@ -620,7 +638,5 @@ mod tests {
         };
 
         let o = to_string(&t).unwrap();
-
-        println!("{}", o);
     }
 }

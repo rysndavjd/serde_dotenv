@@ -1,3 +1,5 @@
+use alloc::{fmt, format, string::String};
+
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Error {
     /// Deserialization method used is not supported
@@ -14,20 +16,14 @@ pub enum Error {
     IdentifierStartsWithDigit,
     /// Identifier contains a value that is not an ascii alphabetical character or `_`
     InvalidIdentifier {
-        char: char,
         index: usize,
     },
     /// Value contains an unterminated `'`
-    ValueUnterminatedSingleQuote {
-        index: usize,
-    },
+    ValueUnterminatedSingleQuote,
     /// Value contains an unterminated `"`
-    ValueUnterminatedDoubleQuote {
-        index: usize,
-    },
-    /// Value contains unescaped special shell character (`|`, `&`, `;`, `<`, `>`, `(`, `)`, `` ` ``, `\`)
+    ValueUnterminatedDoubleQuote,
+    /// Value contains unescaped special shell character (`|`, `&`, `;`, `<`, `>`, `(`, `)`, `` ` ``, `\`, ` `, `\t`)
     ValueUnescapedShellChar {
-        char: char,
         index: usize,
     },
     /// Value has a dangling escape character `\`
@@ -54,13 +50,19 @@ pub enum Error {
     ValueNotF32,
     /// Value is not a [`f64`]
     ValueNotF64,
+    /// Float given is not finite.
+    FloatNotFinite,
+    /// Value contains invalid UTF-8.
+    InvaildUtf8,
     /// Value is not a [`unit`]
     ValueNotUnit,
+    /// An IO Error as occured
+    IoError,
     Custom(String),
 }
 
-impl crate::std::fmt::Display for Error {
-    fn fmt(&self, f: &mut crate::std::fmt::Formatter<'_>) -> crate::std::fmt::Result {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::UnsupportedDeserialization => {
                 write!(f, "Unsupported deserialization method")
@@ -74,22 +76,19 @@ impl crate::std::fmt::Display for Error {
             }
             Error::EmptyIdentifier => write!(f, "identifier is empty"),
             Error::IdentifierStartsWithDigit => write!(f, "identifier starts with a digit"),
-            Error::InvalidIdentifier { char, index } => {
+            Error::InvalidIdentifier { index } => {
+                write!(f, "identifier contains invalid character, index: {index}")
+            }
+            Error::ValueUnterminatedSingleQuote => {
+                write!(f, "value has unterminated single quote")
+            }
+            Error::ValueUnterminatedDoubleQuote => {
+                write!(f, "value has unterminated double quote")
+            }
+            Error::ValueUnescapedShellChar { index } => {
                 write!(
                     f,
-                    "identifier contains invalid character, char: {char:?}, index: {index}"
-                )
-            }
-            Error::ValueUnterminatedSingleQuote { index } => {
-                write!(f, "value has unterminated single quote, index: {index}")
-            }
-            Error::ValueUnterminatedDoubleQuote { index } => {
-                write!(f, "value has unterminated double quote, index: {index}")
-            }
-            Error::ValueUnescapedShellChar { char, index } => {
-                write!(
-                    f,
-                    "value contains unescaped shell character, char: {char:?}, index: {index}"
+                    "value contains unescaped shell character, index: {index}"
                 )
             }
             Error::ValueDanglingEscape => {
@@ -128,8 +127,17 @@ impl crate::std::fmt::Display for Error {
             Error::ValueNotF64 => {
                 write!(f, "value is not a 64-bit float")
             }
+            Error::FloatNotFinite => {
+                write!(f, "float is not a finite number")
+            }
+            Error::InvaildUtf8 => {
+                write!(f, "value contains invalid utf-8")
+            }
             Error::ValueNotUnit => {
                 write!(f, "value is not a unit")
+            }
+            Error::IoError => {
+                write!(f, "io error")
             }
             Error::Custom(msg) => write!(f, "{}", msg),
         }
@@ -137,14 +145,28 @@ impl crate::std::fmt::Display for Error {
 }
 
 impl serde::ser::Error for Error {
-    fn custom<T: alloc::fmt::Display>(msg: T) -> Self {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
         Error::Custom(format!("{}", msg))
     }
 }
 
 impl serde::de::Error for Error {
-    fn custom<T: alloc::fmt::Display>(msg: T) -> Self {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
         Error::Custom(format!("{}", msg))
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::io::Error> for Error {
+    fn from(_: std::io::Error) -> Self {
+        Error::IoError
+    }
+}
+
+#[cfg(feature = "no_std")]
+impl<E: embedded_io::Error> From<E> for Error {
+    fn from(_: E) -> Self {
+        Error::IoError
     }
 }
 

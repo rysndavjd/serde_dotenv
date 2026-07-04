@@ -7,12 +7,17 @@ repository = "https://github.com/rysndavjd/serde_dotenv"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-embedded-io = "0.7.1"
-indexmap = "2.14.0"
-itoa = "1.0.18"
-serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"]}
-zmij = "1.0.21"
+embedded-io = { version = "0.7.1", default-features = false, features = ["alloc"], optional = true }
+lexical-core = { version = "1.0.6", default-features = false, features = ["parse-floats", "parse-integers", "write-floats", "write-integers"] }
+serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+serde = { version = "1.0.228" }
+serde_derive = { version = "1.0.228" }
+serde_test = { version = "1.0.177" }
 
 [features]
-default = ["std"]
-std = ["serde/std"]
+default = ["std", "writer"]
+std = ["serde/std", "lexical-core/std"]
+no_std = ["dep:embedded-io"]
+writer = []

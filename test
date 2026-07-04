@@ -1,7 +1,0 @@
-one="1"
-one_num=1
-hello1="Hello World"
-hello2='Hello World'
-hello3=Hello\ World
-single_quote='This is a literal \ @&#(!'
-double_quote="Special chars need escaping, \\ \( \)"

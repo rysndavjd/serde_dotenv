@@ -1,5 +1,5 @@
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
-pub enum QuoteState {
+pub enum State {
     #[default]
     Unquoted,
     SingleQuoted,

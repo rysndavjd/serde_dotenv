@@ -9,24 +9,37 @@ use std::io::Write;
 #[cfg(all(feature = "no_std", feature = "writer"))]
 use embedded_io::Write;
 
-pub fn validate_value<'a>(val: &'a str) -> Result<Cow<'a, str>, Error> {
-    if !val.contains(['"', '\'', '\\', '|', '&', ';', '<', '>', '(', ')', '`']) {
+pub fn validate_line<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, Error> {
+    if !val.iter().any(|b| {
+        b == &b'"'
+            || b == &b'\''
+            || b == &b'\\'
+            || b == &b'|'
+            || b == &b'&'
+            || b == &b';'
+            || b == &b'<'
+            || b == &b'>'
+            || b == &b'('
+            || b == &b')'
+            || b == &b'`'
+            || b == &b' '
+            || b == &b'\t'
+            || b == &b'\n'
+    }) {
         return Ok(Cow::Borrowed(val));
     }
 
-    let mut output = String::new();
-
+    let mut output: Vec<u8> = Vec::new();
+    let chars = &mut val.iter().enumerate();
     let mut state = State::Unquoted;
-    let mut quote_pos = 0usize;
-
-    let mut chars = val.char_indices().peekable();
 
     while let Some((i, c)) = chars.next() {
-        if c == '\\' && state != State::SingleQuoted {
+        if c == &b'\\' && state != State::SingleQuoted {
             match chars.next() {
                 Some((_, escaped_char)) => {
-                    output.push(c);
-                    output.push(escaped_char);
+                    // Pushing `\` and the escaped char
+                    output.push(*c);
+                    output.push(*escaped_char);
                     continue;
                 }
                 None => return Err(Error::ValueDanglingEscape),
@@ -35,35 +48,28 @@ pub fn validate_value<'a>(val: &'a str) -> Result<Cow<'a, str>, Error> {
 
         match state {
             State::Unquoted => match c {
-                '\'' => {
-                    quote_pos = i;
+                &b'\'' => {
                     state = State::SingleQuoted;
                 }
-                '"' => {
-                    quote_pos = i;
+                &b'"' => {
                     state = State::DoubleQuoted;
                 }
-                '|' | '&' | ';' | '<' | '>' | '(' | ')' | '`' | '\\' => {
+                &b'|' | &b'&' | &b';' | &b'<' | &b'>' | &b'(' | &b')' | &b'`' | &b' ' | &b'\t'
+                | b'\n' => {
                     return Err(Error::ValueUnescapedShellChar { index: i });
                 }
                 _ => {}
             },
-            State::SingleQuoted if c == '\'' => {
-                debug_assert!(i > quote_pos);
-
+            State::SingleQuoted if c == &b'\'' => {
                 state = State::Unquoted;
-                quote_pos = 0;
             }
-            State::DoubleQuoted if c == '"' => {
-                debug_assert!(i > quote_pos);
-
+            State::DoubleQuoted if c == &b'"' => {
                 state = State::Unquoted;
-                quote_pos = 0;
             }
             _ => (),
         }
 
-        output.push(c);
+        output.push(*c);
     }
 
     match state {
@@ -272,7 +278,7 @@ where
         T: ?Sized + Serialize,
     {
         if !self.first {
-            self.ser.writer.write_all(b"\n")?;
+            self.ser.formatter.end_object(&mut self.ser.writer)?;
         }
         self.first = false;
         key.serialize(MapKeySerializer { ser: self.ser })
@@ -282,12 +288,13 @@ where
     where
         T: ?Sized + Serialize,
     {
-        self.ser.writer.write_all(b"=")?;
+        self.ser.formatter.equal_split(&mut self.ser.writer)?;
         value.serialize(&mut *self.ser)?;
         Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        //self.ser.formatter.end_object(&mut self.ser.writer)?;
         Ok(())
     }
 }
@@ -311,8 +318,9 @@ where
     }
 }
 
-pub struct Serializer<W> {
+pub struct Serializer<W, F = CompactFormatter> {
     writer: W,
+    formatter: F,
 }
 
 impl<W> Serializer<W>
@@ -321,7 +329,18 @@ where
 {
     #[inline]
     pub fn new(writer: W) -> Self {
-        Serializer { writer }
+        Serializer::with_formatter(writer, CompactFormatter)
+    }
+}
+
+impl<W, F> Serializer<W, F>
+where
+    W: Write,
+    F: Formatter,
+{
+    #[inline]
+    pub fn with_formatter(writer: W, formatter: F) -> Self {
+        Serializer { writer, formatter }
     }
 
     #[inline]
@@ -347,122 +366,79 @@ where
     type SerializeStructVariant = ser::Impossible<Self::Ok, Self::Error>;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
-        let s = if v {
-            b"true" as &[u8]
-        } else {
-            b"false" as &[u8]
-        };
-        self.writer.write_all(s)?;
+        self.formatter.write_bool(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; i8::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_i8(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; i16::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_i16(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; i32::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_i32(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; i64::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_i64(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_i128(self, v: i128) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; i128::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_i128(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; u8::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_u8(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; u16::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_u16(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; u32::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_u32(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; u64::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_u64(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_u128(self, v: u128) -> Result<Self::Ok, Self::Error> {
-        let mut buf = [0u8; u128::FORMATTED_SIZE_DECIMAL];
-        let s = lexical_core::write(v, &mut buf);
-        self.writer.write_all(s)?;
+        self.formatter.write_u128(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        match v.classify() {
-            FpCategory::Nan | FpCategory::Infinite => {
-                return Err(Error::FloatNotFinite);
-            }
-            _ => {
-                let mut buf = [0u8; f32::FORMATTED_SIZE_DECIMAL];
-                let s = lexical_core::write(v, &mut buf);
-                self.writer.write_all(s)?;
-            }
-        }
+        self.formatter.write_f32(&mut self.writer, v)?;
 
         Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        match v.classify() {
-            FpCategory::Nan | FpCategory::Infinite => {
-                return Err(Error::FloatNotFinite);
-            }
-            _ => {
-                let mut buf = [0u8; f64::FORMATTED_SIZE_DECIMAL];
-                let s = lexical_core::write(v, &mut buf);
-                self.writer.write_all(s)?;
-            }
-        }
+        self.formatter.write_f64(&mut self.writer, v)?;
 
         Ok(())
     }
@@ -473,9 +449,8 @@ where
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        let value = validate_value(v)?;
-        self.writer.write_all(value.as_bytes())?;
-
+        let value = validate_line(v.as_bytes())?;
+        self.writer.write_all(&value)?;
         Ok(())
     }
 
@@ -532,9 +507,12 @@ where
     where
         T: ?Sized + serde::Serialize,
     {
+        self.formatter.begin_object(&mut self.writer)?;
         self.serialize_str(variant)?;
-        self.writer.write_all(b"=")?;
+        self.formatter.equal_split(&mut self.writer)?;
         value.serialize(&mut *self)?;
+        self.formatter.end_object(&mut self.writer)?;
+
         Ok(())
     }
 
@@ -590,6 +568,227 @@ where
     }
 }
 
+pub trait Formatter {
+    #[inline]
+    fn write_null<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bool<W>(&mut self, writer: &mut W, v: bool) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let s = if v {
+            b"true" as &[u8]
+        } else {
+            b"false" as &[u8]
+        };
+        writer.write_all(s)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_i8<W>(&mut self, writer: &mut W, v: i8) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; i8::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_i16<W>(&mut self, writer: &mut W, v: i16) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; i16::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_i32<W>(&mut self, writer: &mut W, v: i32) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; i32::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_i64<W>(&mut self, writer: &mut W, v: i64) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; i64::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_i128<W>(&mut self, writer: &mut W, v: i128) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; i128::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_u8<W>(&mut self, writer: &mut W, v: u8) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; u8::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_u16<W>(&mut self, writer: &mut W, v: u16) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; u16::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_u32<W>(&mut self, writer: &mut W, v: u32) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; u32::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_u64<W>(&mut self, writer: &mut W, v: u64) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; u64::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_u128<W>(&mut self, writer: &mut W, v: u128) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        let mut buf = [0u8; u128::FORMATTED_SIZE];
+        lexical_core::write(v, &mut buf);
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_f32<W>(&mut self, writer: &mut W, v: f32) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        match v.classify() {
+            FpCategory::Nan | FpCategory::Infinite => {
+                return Err(Error::FloatNotFinite);
+            }
+            _ => {
+                let mut buf = [0u8; f32::FORMATTED_SIZE_DECIMAL];
+                let s = lexical_core::write(v, &mut buf);
+                writer.write_all(s)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn write_f64<W>(&mut self, writer: &mut W, v: f64) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        match v.classify() {
+            FpCategory::Nan | FpCategory::Infinite => {
+                return Err(Error::FloatNotFinite);
+            }
+            _ => {
+                let mut buf = [0u8; f64::FORMATTED_SIZE_DECIMAL];
+                let s = lexical_core::write(v, &mut buf);
+                writer.write_all(s)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn write_number_str<W>(&mut self, writer: &mut W, v: &str) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(v.as_bytes())?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_escape<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b"\\")?;
+        Ok(())
+    }
+
+    #[inline]
+    fn begin_object<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        Ok(())
+    }
+
+    #[inline]
+    fn equal_split<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b"=")?;
+        Ok(())
+    }
+
+    #[inline]
+    fn end_object<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b" ")?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CompactFormatter;
+
+impl Formatter for CompactFormatter {}
+
 #[cfg(feature = "writer")]
 pub fn to_writer<W, T>(writer: W, value: &T) -> Result<(), Error>
 where
@@ -622,6 +821,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{println, string::ToString};
+
     use super::*;
 
     #[derive(serde::Serialize)]
@@ -633,10 +834,12 @@ mod tests {
     #[test]
     fn test() {
         let t = Test {
-            name: r#"TEST"#.into(),
+            name: "TE\\\nST".to_string(),
             age: 67,
         };
 
         let o = to_string(&t).unwrap();
+
+        println!("{}", o);
     }
 }

@@ -56,6 +56,7 @@ fn parse_line<'a>(v: &'a [u8]) -> Result<(&'a [u8], Cow<'a, [u8]>), Error> {
             || b == &b'`'
             || b == &b' '
             || b == &b'\t'
+            || b == &b'\n'
     }) {
         return Ok((key, Cow::Borrowed(val)));
     }
@@ -85,7 +86,8 @@ fn parse_line<'a>(v: &'a [u8]) -> Result<(&'a [u8], Cow<'a, [u8]>), Error> {
                     state = State::DoubleQuoted;
                     continue;
                 }
-                &b'|' | &b'&' | &b';' | &b'<' | &b'>' | &b'(' | &b')' | &b'`' | &b' ' | &b'\t' => {
+                &b'|' | &b'&' | &b';' | &b'<' | &b'>' | &b'(' | &b')' | &b'`' | &b' ' | &b'\t'
+                | b'\n' => {
                     return Err(Error::ValueUnescapedShellChar { index: i });
                 }
                 _ => {}
@@ -813,7 +815,7 @@ mod tests {
         let t: Test = from_str("a=whata\nb=whatb\nc=12").unwrap();
         let b: Test = from_bytes(b"a=bytes\nb=0xFFFF\nc=12").unwrap();
 
-        println!("{:?}", t);
-        println!("{:?}", b);
+        // println!("{:?}", t);
+        // println!("{:?}", b);
     }
 }

@@ -14,11 +14,13 @@ mod ser;
 pub use crate::{
     de::{Deserializer, from_str},
     error::Error,
-    ser::Serializer,
 };
 
 #[cfg(feature = "writer")]
-pub use crate::ser::{to_string, to_vec, to_writer};
+pub use crate::ser::{
+    Serializer, to_string_compact_posix, to_string_pretty_posix, to_vec_compact_posix,
+    to_vec_pretty_posix, to_writer_compact_posix, to_writer_pretty_posix,
+};
 
 // #[cfg(feature = "std")]
 // compile_error!("");

@@ -1,86 +1,64 @@
-use crate::{common::State, error::Error, std::num::FpCategory};
+use crate::{error::Error, std::num::FpCategory};
 use alloc::{borrow::Cow, string::String, vec::Vec};
 use lexical_core::FormattedSize;
 use serde::ser::{self, Impossible, Serialize};
 
-#[cfg(all(feature = "std", feature = "writer"))]
+#[cfg(feature = "std")]
 use std::io::Write;
 
-#[cfg(all(feature = "no_std", feature = "writer"))]
+#[cfg(feature = "no_std")]
 use embedded_io::Write;
 
-fn validate_line<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, Error> {
-    if !val.iter().any(|b| {
-        b == &b'"'
-            || b == &b'\''
-            || b == &b'\\'
-            || b == &b'|'
-            || b == &b'&'
-            || b == &b';'
-            || b == &b'<'
-            || b == &b'>'
-            || b == &b'('
-            || b == &b')'
-            || b == &b'`'
-            || b == &b' '
-            || b == &b'\t'
-            || b == &b'\n'
-    }) {
+/// Quotes if necessary a string so a POSIX shell reads it back as exactly
+/// the same string, with no expansion, globbing, or word splitting.
+///
+/// Only single quotes are used for quoting, which keeps the output portable
+/// and should be immune to any shell-quirks even if they follow the POSIX
+/// specification loosely.
+fn serialize_line<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, Error> {
+    if val.is_empty() {
+        return Ok(Cow::Borrowed(b"''"));
+    }
+
+    let mut borrow = true;
+
+    for c in val {
+        match c {
+            b'+'
+            | b'-'
+            | b'.'
+            | b'/'
+            | b':'
+            | b'@'
+            | b']'
+            | b'_'
+            | b'0'..=b'9'
+            | b'A'..=b'Z'
+            | b'a'..=b'z' => (),
+            b'\0' => return Err(Error::NullByte),
+            _ => {
+                borrow = false;
+            }
+        };
+    }
+
+    if borrow {
         return Ok(Cow::Borrowed(val));
     }
 
     let mut output: Vec<u8> = Vec::new();
-    let chars = &mut val.iter().enumerate();
-    let mut state = State::Unquoted;
 
-    while let Some((i, c)) = chars.next() {
-        if c == &b'\\' && state != State::SingleQuoted {
-            match chars.next() {
-                Some((_, escaped_char)) => {
-                    // Pushing `\` and the escaped char
-                    output.push(*c);
-                    output.push(*escaped_char);
-                    continue;
-                }
-                None => return Err(Error::ValueDanglingEscape),
+    output.push(b'\'');
+    for c in val {
+        if *c == b'\'' {
+            for c in b"'\\''" {
+                output.push(*c);
             }
+        } else {
+            output.push(*c);
         }
-
-        match state {
-            State::Unquoted => match c {
-                &b'\'' => {
-                    state = State::SingleQuoted;
-                }
-                &b'"' => {
-                    state = State::DoubleQuoted;
-                }
-                &b'|' | &b'&' | &b';' | &b'<' | &b'>' | &b'(' | &b')' | &b'`' | &b' ' | &b'\t'
-                | b'\n' => {
-                    return Err(Error::ValueUnescapedShellChar { index: i });
-                }
-                _ => {}
-            },
-            State::SingleQuoted if c == &b'\'' => {
-                state = State::Unquoted;
-            }
-            State::DoubleQuoted if c == &b'"' => {
-                state = State::Unquoted;
-            }
-            _ => (),
-        }
-
-        output.push(*c);
     }
-
-    match state {
-        State::SingleQuoted => {
-            return Err(Error::ValueUnterminatedSingleQuote);
-        }
-        State::DoubleQuoted => {
-            return Err(Error::ValueUnterminatedDoubleQuote);
-        }
-        _ => (),
-    }
+    output.push(b'\'');
 
     Ok(Cow::Owned(output))
 }
@@ -512,7 +490,7 @@ where
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        let value = validate_line(v)?;
+        let value = serialize_line(v)?;
         self.writer.write_all(value.as_ref())?;
         Ok(())
     }
@@ -934,7 +912,6 @@ pub struct BashPrettyFormatter;
 
 impl Formatter for BashPrettyFormatter {}
 
-#[cfg(feature = "writer")]
 pub fn to_writer_compact_posix<W, T>(writer: W, value: &T) -> Result<(), Error>
 where
     W: Write,
@@ -944,7 +921,6 @@ where
     value.serialize(&mut ser)
 }
 
-#[cfg(feature = "writer")]
 pub fn to_vec_compact_posix<T>(value: &T) -> Result<Vec<u8>, Error>
 where
     T: ?Sized + Serialize,
@@ -954,7 +930,6 @@ where
     Ok(writer)
 }
 
-#[cfg(feature = "writer")]
 pub fn to_string_compact_posix<T>(value: &T) -> Result<String, Error>
 where
     T: ?Sized + Serialize,
@@ -964,7 +939,6 @@ where
     Ok(string)
 }
 
-#[cfg(feature = "writer")]
 pub fn to_writer_pretty_posix<W, T>(writer: W, value: &T) -> Result<(), Error>
 where
     W: Write,
@@ -974,7 +948,6 @@ where
     value.serialize(&mut ser)
 }
 
-#[cfg(feature = "writer")]
 pub fn to_vec_pretty_posix<T>(value: &T) -> Result<Vec<u8>, Error>
 where
     T: ?Sized + Serialize,
@@ -984,7 +957,6 @@ where
     Ok(writer)
 }
 
-#[cfg(feature = "writer")]
 pub fn to_string_pretty_posix<T>(value: &T) -> Result<String, Error>
 where
     T: ?Sized + Serialize,
@@ -996,6 +968,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
     use std::{println, string::ToString};
 
     use super::*;
@@ -1021,8 +994,35 @@ mod tests {
             .to_vec(),
         };
 
-        let o = to_string_compact_posix(&t).unwrap();
+        let o = to_string_pretty_posix(&t).unwrap();
 
         println!("{}", o);
+    }
+
+    fn s(input: &[u8]) -> Vec<u8> {
+        serialize_line(input).unwrap().into_owned()
+    }
+
+    #[test]
+    fn borrowed_when_safe() {
+        let r = serialize_line(b"a+b-c.d/e:f@g]h_i09").unwrap();
+        assert!(matches!(r, Cow::Borrowed(_)));
+
+        assert_eq!(s(b""), b"''");
+
+        assert_eq!(s(b"hello world"), b"'hello world'");
+        assert_eq!(s(b"$HOME"), b"'$HOME'");
+        assert_eq!(s(b"a\\b"), b"'a\\b'");
+        assert_eq!(s(b"say \"hi\""), b"'say \"hi\"'");
+        assert_eq!(s(b"a\nb"), b"'a\nb'");
+        assert_eq!(s(b"it's"), b"'it'\\''s'");
+        assert_eq!(s(b"it's $5"), b"'it'\\''s $5'");
+        assert_eq!(s(b"it's a\\b"), b"'it'\\''s a\\b'");
+        assert_eq!(s(b"it's \"x\""), b"'it'\\''s \"x\"'");
+
+        assert_eq!(s(b"it's\nmore"), b"'it'\\''s\nmore'");
+
+        assert!(matches!(serialize_line(b"a\0b"), Err(Error::NullByte)));
+        assert!(matches!(serialize_line(b"a b\0"), Err(Error::NullByte)));
     }
 }

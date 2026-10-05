@@ -58,6 +58,7 @@ pub enum Error {
     ValueNotUnit,
     /// An IO Error as occured
     IoError,
+    NullByte,
     Custom(String),
 }
 
@@ -138,6 +139,9 @@ impl fmt::Display for Error {
             }
             Error::IoError => {
                 write!(f, "io error")
+            }
+            Error::NullByte => {
+                write!(f, "null byte found")
             }
             Error::Custom(msg) => write!(f, "{}", msg),
         }

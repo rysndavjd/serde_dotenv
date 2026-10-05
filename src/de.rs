@@ -1,5 +1,4 @@
 use crate::{
-    common::State,
     error::Error,
     std::{iter::Map, mem::take, slice::SplitInclusive, str::from_utf8},
 };
@@ -9,6 +8,14 @@ use alloc::{
     vec::Vec,
 };
 use serde::de::{self, Deserialize, DeserializeSeed, MapAccess, value::BytesDeserializer};
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
+pub enum State {
+    #[default]
+    Unquoted,
+    SingleQuoted,
+    DoubleQuoted,
+}
 
 fn parse_line<'a>(v: &'a [u8]) -> Result<(&'a [u8], Cow<'a, [u8]>), Error> {
     if v.is_empty() {

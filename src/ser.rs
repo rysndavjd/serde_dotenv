@@ -1,4 +1,4 @@
-use crate::{error::Error, std::num::FpCategory};
+use crate::{error::SerError, std::num::FpCategory};
 use alloc::{borrow::Cow, string::String, vec::Vec};
 use lexical_core::FormattedSize;
 use serde::ser::{self, Impossible, Serialize};
@@ -9,13 +9,46 @@ use std::io::Write;
 #[cfg(feature = "no_std")]
 use embedded_io::Write;
 
+/// Validates given key returning it if
+/// - starts with `A-Z`, `a-z`, or `_`
+/// - contains only `A-Z`, `a-z`, `0-9`, or `_` after that
+/// - is not empty
+///
+/// [POSIX specification](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap03.html#tag_03_3.216)
+fn validate_key(key: &str) -> Result<&str, SerError> {
+    if key.is_empty() {
+        return Err(SerError::EmptyKey);
+    }
+
+    let mut characters = key.chars();
+
+    if let Some(c) = characters.next() {
+        if c.is_ascii_digit() {
+            return Err(SerError::KeyStartsWithDigit);
+        }
+        if !(c.is_ascii_alphabetic() || c == '_') {
+            return Err(SerError::InvalidKey);
+        }
+    }
+
+    for c in characters {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            return Err(SerError::InvalidKey);
+        }
+    }
+
+    Ok(key)
+}
+
 /// Quotes if necessary a string so a POSIX shell reads it back as exactly
 /// the same string, with no expansion, globbing, or word splitting.
 ///
 /// Only single quotes are used for quoting, which keeps the output portable
 /// and should be immune to any shell-quirks even if they follow the POSIX
 /// specification loosely.
-fn serialize_line<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, Error> {
+///
+/// [POSIX specification](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html)
+fn serialize_value<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, SerError> {
     if val.is_empty() {
         return Ok(Cow::Borrowed(b"''"));
     }
@@ -35,7 +68,7 @@ fn serialize_line<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, Error> {
             | b'0'..=b'9'
             | b'A'..=b'Z'
             | b'a'..=b'z' => (),
-            b'\0' => return Err(Error::NullByte),
+            b'\0' => return Err(SerError::NullByte),
             _ => {
                 borrow = false;
             }
@@ -73,89 +106,91 @@ where
     F: Formatter,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = SerError;
 
     type SerializeSeq = Impossible<(), Self::Error>;
-    type SerializeTuple = Impossible<(), Error>;
-    type SerializeTupleStruct = Impossible<(), Error>;
-    type SerializeTupleVariant = Impossible<(), Error>;
-    type SerializeMap = Impossible<(), Error>;
-    type SerializeStruct = Impossible<(), Error>;
-    type SerializeStructVariant = Impossible<(), Error>;
+    type SerializeTuple = Impossible<(), Self::Error>;
+    type SerializeTupleStruct = Impossible<(), Self::Error>;
+    type SerializeTupleVariant = Impossible<(), Self::Error>;
+    type SerializeMap = Impossible<(), Self::Error>;
+    type SerializeStruct = Impossible<(), Self::Error>;
+    type SerializeStructVariant = Impossible<(), Self::Error>;
 
     fn serialize_bool(self, _: bool) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_i8(self, _: i8) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_i16(self, _: i16) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_i32(self, _: i32) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_i64(self, _: i64) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_u8(self, _: u8) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_u16(self, _: u16) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_u32(self, _: u32) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_u64(self, _: u64) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_f32(self, _: f32) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_f64(self, _: f64) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_char(self, _: char) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        self.ser.serialize_str(v)
+        let key = validate_key(v)?;
+        self.ser.writer.write_all(key.as_bytes())?;
+        Ok(())
     }
 
     fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_some<T>(self, _: &T) -> Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_unit_variant(
@@ -164,7 +199,7 @@ where
         _: u32,
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
-        self.ser.serialize_str(variant)
+        self.serialize_str(variant)
     }
 
     fn serialize_newtype_struct<T>(
@@ -188,15 +223,15 @@ where
     where
         T: ?Sized + Serialize,
     {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_tuple_struct(
@@ -204,7 +239,7 @@ where
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_tuple_variant(
@@ -214,11 +249,11 @@ where
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_struct(
@@ -226,7 +261,7 @@ where
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_struct_variant(
@@ -236,7 +271,7 @@ where
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 }
 
@@ -251,14 +286,14 @@ where
     F: Formatter,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = SerError;
 
     fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
     {
         if !self.first {
-            self.ser.formatter.end_object(&mut self.ser.writer)?;
+            self.ser.formatter.split_object(&mut self.ser.writer)?;
         }
         self.first = false;
         key.serialize(MapKeySerializer { ser: self.ser })
@@ -268,13 +303,12 @@ where
     where
         T: ?Sized + Serialize,
     {
-        self.ser.formatter.equal_split(&mut self.ser.writer)?;
+        self.ser.writer.write_all(b"=")?;
         value.serialize(&mut *self.ser)?;
         Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        //self.ser.formatter.end_object(&mut self.ser.writer)?;
         Ok(())
     }
 }
@@ -285,7 +319,7 @@ where
     F: Formatter,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = SerError;
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
@@ -305,7 +339,7 @@ where
     F: Formatter,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = SerError;
 
     fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
@@ -323,6 +357,47 @@ where
     }
 }
 
+impl<'a, W, F> ser::SerializeTuple for Compound<'a, W, F>
+where
+    W: Write,
+    F: Formatter,
+{
+    type Ok = ();
+    type Error = SerError;
+
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        ser::SerializeSeq::serialize_element(self, value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        ser::SerializeSeq::end(self)
+    }
+}
+
+impl<'a, W, F> ser::SerializeTupleStruct for Compound<'a, W, F>
+where
+    W: Write,
+    F: Formatter,
+{
+    type Ok = ();
+    type Error = SerError;
+
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        ser::SerializeSeq::serialize_element(self, value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        ser::SerializeSeq::end(self)
+    }
+}
+
+/// A serde serializer that writes shell assignments.
 pub struct Serializer<W, F> {
     writer: W,
     formatter: F,
@@ -332,6 +407,7 @@ impl<W> Serializer<W, PosixCompactFormatter>
 where
     W: Write,
 {
+    /// Creates a serializer that writes space separated POSIX assignments.
     #[inline]
     pub fn new_compact_posix(writer: W) -> Self {
         Serializer::with_formatter(writer, PosixCompactFormatter)
@@ -342,6 +418,8 @@ impl<W> Serializer<W, BashCompactFormatter>
 where
     W: Write,
 {
+    /// Creates a serializer that writes space separated assignments with
+    /// Bash style `(a b c)` arrays.
     #[inline]
     pub fn new_compact_bash(writer: W) -> Self {
         Serializer::with_formatter(writer, BashCompactFormatter)
@@ -352,6 +430,7 @@ impl<W> Serializer<W, PosixPrettyFormatter>
 where
     W: Write,
 {
+    /// Creates a serializer that writes one POSIX assignment per line.
     #[inline]
     pub fn new_pretty_posix(writer: W) -> Self {
         Serializer::with_formatter(writer, PosixPrettyFormatter)
@@ -362,6 +441,8 @@ impl<W> Serializer<W, BashPrettyFormatter>
 where
     W: Write,
 {
+    /// Creates a serializer that writes one assignment per line with
+    /// Bash style `(a b c)` arrays.
     #[inline]
     pub fn new_pretty_bash(writer: W) -> Self {
         Serializer::with_formatter(writer, BashPrettyFormatter)
@@ -373,11 +454,13 @@ where
     W: Write,
     F: Formatter,
 {
+    /// Creates a serializer that writes to `writer` using [`Formatter`].
     #[inline]
     pub fn with_formatter(writer: W, formatter: F) -> Self {
         Serializer { writer, formatter }
     }
 
+    /// Consumes the serializer and returns the underlying writer.
     #[inline]
     pub fn into_inner(self) -> W {
         self.writer
@@ -391,11 +474,11 @@ where
 {
     type Ok = ();
 
-    type Error = Error;
+    type Error = SerError;
 
     type SerializeSeq = Compound<'a, W, F>;
-    type SerializeTuple = Impossible<Self::Ok, Self::Error>;
-    type SerializeTupleStruct = Impossible<Self::Ok, Self::Error>;
+    type SerializeTuple = Compound<'a, W, F>;
+    type SerializeTupleStruct = Compound<'a, W, F>;
     type SerializeTupleVariant = Impossible<Self::Ok, Self::Error>;
     type SerializeMap = Compound<'a, W, F>;
     type SerializeStruct = Compound<'a, W, F>;
@@ -490,7 +573,7 @@ where
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        let value = serialize_line(v)?;
+        let value = serialize_value(v)?;
         self.writer.write_all(value.as_ref())?;
         Ok(())
     }
@@ -538,19 +621,13 @@ where
         self,
         _: &'static str,
         _: u32,
-        variant: &'static str,
-        value: &T,
+        _: &'static str,
+        _: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        self.formatter.begin_object(&mut self.writer)?;
-        self.serialize_str(variant)?;
-        self.formatter.equal_split(&mut self.writer)?;
-        value.serialize(&mut *self)?;
-        self.formatter.end_object(&mut self.writer)?;
-
-        Ok(())
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
@@ -561,16 +638,16 @@ where
         })
     }
 
-    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        self.serialize_seq(Some(len))
     }
 
     fn serialize_tuple_struct(
         self,
         _: &'static str,
-        _: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        self.serialize_seq(Some(len))
     }
 
     fn serialize_tuple_variant(
@@ -580,7 +657,7 @@ where
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 
     fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
@@ -605,23 +682,14 @@ where
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        Err(Error::UnsupportedSerialization)
+        Err(SerError::UnsupportedSerialization)
     }
 }
 
 pub trait Formatter {
-    /// Writes a `null` value to the specified writer.
-    #[inline]
-    fn write_null<W>(&mut self, _writer: &mut W) -> Result<(), Error>
-    where
-        W: ?Sized + Write,
-    {
-        Ok(())
-    }
-
     /// Writes a `true` or `false` value to the specified writer.
     #[inline]
-    fn write_bool<W>(&mut self, writer: &mut W, v: bool) -> Result<(), Error>
+    fn write_bool<W>(&mut self, writer: &mut W, v: bool) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
@@ -636,138 +704,127 @@ pub trait Formatter {
 
     /// Writes an integer [`i8`] to the specified writer.
     #[inline]
-    fn write_i8<W>(&mut self, writer: &mut W, v: i8) -> Result<(), Error>
+    fn write_i8<W>(&mut self, writer: &mut W, v: i8) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; i8::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`i16`] to the specified writer.
     #[inline]
-    fn write_i16<W>(&mut self, writer: &mut W, v: i16) -> Result<(), Error>
+    fn write_i16<W>(&mut self, writer: &mut W, v: i16) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; i16::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`i32`] to the specified writer.
     #[inline]
-    fn write_i32<W>(&mut self, writer: &mut W, v: i32) -> Result<(), Error>
+    fn write_i32<W>(&mut self, writer: &mut W, v: i32) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; i32::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`i64`] to the specified writer.
     #[inline]
-    fn write_i64<W>(&mut self, writer: &mut W, v: i64) -> Result<(), Error>
+    fn write_i64<W>(&mut self, writer: &mut W, v: i64) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; i64::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`i128`] to the specified writer.
     #[inline]
-    fn write_i128<W>(&mut self, writer: &mut W, v: i128) -> Result<(), Error>
+    fn write_i128<W>(&mut self, writer: &mut W, v: i128) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; i128::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`u8`] to the specified writer.
     #[inline]
-    fn write_u8<W>(&mut self, writer: &mut W, v: u8) -> Result<(), Error>
+    fn write_u8<W>(&mut self, writer: &mut W, v: u8) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; u8::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`u16`] to the specified writer.
     #[inline]
-    fn write_u16<W>(&mut self, writer: &mut W, v: u16) -> Result<(), Error>
+    fn write_u16<W>(&mut self, writer: &mut W, v: u16) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; u16::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`u32`] to the specified writer.
     #[inline]
-    fn write_u32<W>(&mut self, writer: &mut W, v: u32) -> Result<(), Error>
+    fn write_u32<W>(&mut self, writer: &mut W, v: u32) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; u32::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`u64`] to the specified writer.
     #[inline]
-    fn write_u64<W>(&mut self, writer: &mut W, v: u64) -> Result<(), Error>
+    fn write_u64<W>(&mut self, writer: &mut W, v: u64) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; u64::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes an integer [`u128`] to the specified writer.
     #[inline]
-    fn write_u128<W>(&mut self, writer: &mut W, v: u128) -> Result<(), Error>
+    fn write_u128<W>(&mut self, writer: &mut W, v: u128) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         let mut buf = [0u8; u128::FORMATTED_SIZE];
-        lexical_core::write(v, &mut buf);
-        writer.write_all(&buf)?;
+        writer.write_all(lexical_core::write(v, &mut buf))?;
         Ok(())
     }
 
     /// Writes a floating point [`f32`] to the specified writer.
     #[inline]
-    fn write_f32<W>(&mut self, writer: &mut W, v: f32) -> Result<(), Error>
+    fn write_f32<W>(&mut self, writer: &mut W, v: f32) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         match v.classify() {
             FpCategory::Nan | FpCategory::Infinite => {
-                return Err(Error::FloatNotFinite);
+                return Err(SerError::FloatNotFinite);
             }
             _ => {
                 let mut buf = [0u8; f32::FORMATTED_SIZE_DECIMAL];
-                let s = lexical_core::write(v, &mut buf);
-                writer.write_all(s)?;
+                writer.write_all(lexical_core::write(v, &mut buf))?;
             }
         }
 
@@ -776,62 +833,43 @@ pub trait Formatter {
 
     /// Writes a floating point [`f64`] to the specified writer.
     #[inline]
-    fn write_f64<W>(&mut self, writer: &mut W, v: f64) -> Result<(), Error>
+    fn write_f64<W>(&mut self, writer: &mut W, v: f64) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
         match v.classify() {
             FpCategory::Nan | FpCategory::Infinite => {
-                return Err(Error::FloatNotFinite);
+                return Err(SerError::FloatNotFinite);
             }
             _ => {
                 let mut buf = [0u8; f64::FORMATTED_SIZE_DECIMAL];
-                let s = lexical_core::write(v, &mut buf);
-                writer.write_all(s)?;
+                writer.write_all(lexical_core::write(v, &mut buf))?;
             }
         }
 
         Ok(())
     }
 
-    /// Writes a number that has already been rendered to a string.
+    /// Writes the separator between two key value pairs, not after the last
+    /// one, so the output has no trailing separator.
+    ///
+    /// # Example
+    ///
+    /// With a space ([`PosixCompactFormatter`]):
+    ///
+    /// ```text
+    /// crate=serde_dotenv version=1 owner=rysndavjd
+    /// ```
+    ///
+    /// With a newline ([`PosixPrettyFormatter`]):
+    ///
+    /// ```text
+    /// crate=serde_dotenv
+    /// version=1
+    /// owner=rysndavjd
+    /// ```
     #[inline]
-    fn write_number_str<W>(&mut self, writer: &mut W, v: &str) -> Result<(), Error>
-    where
-        W: ?Sized + Write,
-    {
-        writer.write_all(v.as_bytes())?;
-        Ok(())
-    }
-
-    #[inline]
-    fn write_escape<W>(&mut self, writer: &mut W) -> Result<(), Error>
-    where
-        W: ?Sized + Write,
-    {
-        writer.write_all(b"\\")?;
-        Ok(())
-    }
-
-    #[inline]
-    fn begin_object<W>(&mut self, _writer: &mut W) -> Result<(), Error>
-    where
-        W: ?Sized + Write,
-    {
-        Ok(())
-    }
-
-    #[inline]
-    fn equal_split<W>(&mut self, writer: &mut W) -> Result<(), Error>
-    where
-        W: ?Sized + Write,
-    {
-        writer.write_all(b"=")?;
-        Ok(())
-    }
-
-    #[inline]
-    fn end_object<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn split_object<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
@@ -839,17 +877,34 @@ pub trait Formatter {
         Ok(())
     }
 
+    /// Writes the text that opens a sequence, before the first element.
+    ///
+    /// # Example
+    ///
+    /// With a `'` ([`PosixCompactFormatter`]):
+    ///
+    /// ```text
+    /// list='1 2 3'
+    /// ```
+    ///
+    /// With a `(` ([`BashCompactFormatter`]):
+    ///
+    /// ```text
+    /// list=(1 2 3)
+    /// ```
     #[inline]
-    fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
-        writer.write_all(b"\"")?;
+        writer.write_all(b"'")?;
         Ok(())
     }
 
+    /// Writes the separator between two sequence elements, not before the
+    /// first or after the last.
     #[inline]
-    fn split_seq<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn split_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
@@ -857,26 +912,43 @@ pub trait Formatter {
         Ok(())
     }
 
+    /// Writes the text that closes a sequence, after the last element.
+    ///
+    /// # Example
+    ///
+    /// With a `'` ([`PosixCompactFormatter`]):
+    ///
+    /// ```text
+    /// list='1 2 3'
+    /// ```
+    ///
+    /// With a `)` ([`BashCompactFormatter`]):
+    ///
+    /// ```text
+    /// list=(1 2 3)
+    /// ```
     #[inline]
-    fn end_seq<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn end_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
-        writer.write_all(b"\"")?;
+        writer.write_all(b"'")?;
         Ok(())
     }
 }
 
+/// Writes pairs separated by a space, with sequences as a quoted word.
 #[derive(Debug, Clone, Default)]
 pub struct PosixCompactFormatter;
 
 impl Formatter for PosixCompactFormatter {}
 
+/// Writes pairs separated by a space, with sequences as Bash arrays.
 #[derive(Debug, Clone, Default)]
 pub struct BashCompactFormatter;
 
 impl Formatter for BashCompactFormatter {
-    fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
@@ -884,7 +956,7 @@ impl Formatter for BashCompactFormatter {
         Ok(())
     }
 
-    fn end_seq<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn end_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
@@ -893,11 +965,12 @@ impl Formatter for BashCompactFormatter {
     }
 }
 
+/// Writes one pair per line, with sequences as a quoted word.
 #[derive(Debug, Clone, Default)]
 pub struct PosixPrettyFormatter;
 
 impl Formatter for PosixPrettyFormatter {
-    fn end_object<W>(&mut self, writer: &mut W) -> Result<(), Error>
+    fn split_object<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
     {
@@ -907,105 +980,165 @@ impl Formatter for PosixPrettyFormatter {
     }
 }
 
+/// Writes one pair per line, with sequences as Bash arrays.
 #[derive(Debug, Clone, Default)]
 pub struct BashPrettyFormatter;
 
-impl Formatter for BashPrettyFormatter {}
+impl Formatter for BashPrettyFormatter {
+    fn split_object<W>(&mut self, writer: &mut W) -> Result<(), SerError>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b"\n")?;
 
-pub fn to_writer_compact_posix<W, T>(writer: W, value: &T) -> Result<(), Error>
+        Ok(())
+    }
+
+    fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b"(")?;
+        Ok(())
+    }
+
+    fn end_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b")")?;
+        Ok(())
+    }
+}
+
+/// Serializes `value` into `writer` using given [`Formatter`].
+///
+/// # Example
+///
+/// ```
+/// use std::io::stdout;
+/// use serde_dotenv::{to_writer, PosixPrettyFormatter};
+/// use serde::Serialize;
+///
+/// #[derive(Serialize)]
+/// struct Debug {
+///     fn_name: String,
+///     code: u64,
+/// }
+///
+/// let error = Debug {
+///     fn_name: String::from("to_string"),
+///     code: 1,
+/// };
+///
+/// to_writer(stdout(), PosixPrettyFormatter, &error);
+/// ```
+pub fn to_writer<W, F, T>(writer: W, formatter: F, value: &T) -> Result<(), SerError>
 where
     W: Write,
+    F: Formatter,
     T: ?Sized + Serialize,
 {
-    let mut ser = Serializer::new_compact_posix(writer);
+    let mut ser = Serializer::with_formatter(writer, formatter);
     value.serialize(&mut ser)
 }
 
-pub fn to_vec_compact_posix<T>(value: &T) -> Result<Vec<u8>, Error>
+/// Serializes `value` into a [`Vec<u8>`] using given [`Formatter`].
+///
+/// # Example
+///
+/// ```
+/// use std::io::stdout;
+/// use serde_dotenv::{to_vec, PosixCompactFormatter};
+/// use serde::Serialize;
+///
+/// #[derive(Serialize)]
+/// struct Packat {
+///     ipv4: [u8; 4],
+///     service: String,
+///     owner: String,
+///     version: f32,
+/// }
+///
+/// let packat = Packat {
+///     ipv4: [1, 1, 1, 1],
+///     service: String::from("DNS"),
+///     owner: String::from("Cloudflare, Inc."),
+///     version: 2.1,
+/// };
+///
+/// let output = to_vec(PosixCompactFormatter, &packat).unwrap();
+///
+/// assert_eq!(output, b"ipv4='1 1 1 1' service=DNS owner='Cloudflare, Inc.' version=2.1".to_vec())
+/// ```
+pub fn to_vec<F, T>(formatter: F, value: &T) -> Result<Vec<u8>, SerError>
 where
+    F: Formatter,
     T: ?Sized + Serialize,
 {
     let mut writer = Vec::new();
-    to_writer_compact_posix(&mut writer, value)?;
+    to_writer(&mut writer, formatter, value)?;
     Ok(writer)
 }
 
-pub fn to_string_compact_posix<T>(value: &T) -> Result<String, Error>
+/// Serializes `value` into a [`String`] using given [`Formatter`].
+///
+/// # Example
+///
+/// ```
+/// use std::io::stdout;
+/// use serde_dotenv::{to_string, BashPrettyFormatter};
+/// use serde::Serialize;
+///
+/// #[derive(Serialize)]
+/// struct Device {
+///     path: String,
+///     size: u64
+/// }
+///
+/// let dev = Device {
+///     path: String::from("/dev/sda"),
+///     size: 500000000000
+/// };
+///
+/// let output = to_string(BashPrettyFormatter, &dev).unwrap();
+///
+/// assert_eq!(output, String::from("path=/dev/sda\nsize=500000000000"))
+/// ```
+pub fn to_string<F, T>(formatter: F, value: &T) -> Result<String, SerError>
 where
+    F: Formatter,
     T: ?Sized + Serialize,
 {
-    let vec = to_vec_compact_posix(value)?;
-    let string = unsafe { String::from_utf8_unchecked(vec) };
-    Ok(string)
-}
-
-pub fn to_writer_pretty_posix<W, T>(writer: W, value: &T) -> Result<(), Error>
-where
-    W: Write,
-    T: ?Sized + Serialize,
-{
-    let mut ser = Serializer::new_pretty_posix(writer);
-    value.serialize(&mut ser)
-}
-
-pub fn to_vec_pretty_posix<T>(value: &T) -> Result<Vec<u8>, Error>
-where
-    T: ?Sized + Serialize,
-{
-    let mut writer = Vec::new();
-    to_writer_pretty_posix(&mut writer, value)?;
-    Ok(writer)
-}
-
-pub fn to_string_pretty_posix<T>(value: &T) -> Result<String, Error>
-where
-    T: ?Sized + Serialize,
-{
-    let vec = to_vec_pretty_posix(value)?;
-    let string = unsafe { String::from_utf8_unchecked(vec) };
-    Ok(string)
+    let vec = to_vec(formatter, value)?;
+    String::from_utf8(vec).map_err(|_| SerError::InvalidUtf8)
 }
 
 #[cfg(test)]
 mod tests {
-    use alloc::borrow::Cow;
-    use std::{println, string::ToString};
-
     use super::*;
-
-    #[derive(serde::Serialize)]
-    struct Test {
-        name: String,
-        age: u32,
-        slice: Vec<String>,
-    }
-
-    #[test]
-    fn test() {
-        let t = Test {
-            name: "TE\\\nST".to_string(),
-            age: 67,
-            slice: [
-                String::from("Test"),
-                String::from("Te\\ st"),
-                String::from("Te\\\"s\\\"t"),
-                String::from("Te\\\"st"),
-            ]
-            .to_vec(),
-        };
-
-        let o = to_string_pretty_posix(&t).unwrap();
-
-        println!("{}", o);
-    }
+    use alloc::borrow::Cow;
 
     fn s(input: &[u8]) -> Vec<u8> {
-        serialize_line(input).unwrap().into_owned()
+        serialize_value(input).unwrap().into_owned()
     }
 
     #[test]
-    fn borrowed_when_safe() {
-        let r = serialize_line(b"a+b-c.d/e:f@g]h_i09").unwrap();
+    fn validate_key_fn() {
+        assert!(validate_key("a").is_ok());
+        assert!(validate_key("_a1").is_ok());
+        assert!(validate_key("A_b9").is_ok());
+        assert!(validate_key("").is_err());
+        assert!(validate_key("1a").is_err());
+        assert!(validate_key("-a").is_err());
+        assert!(validate_key("é").is_err());
+        assert!(validate_key("a b").is_err());
+        assert!(validate_key("a=b").is_err());
+    }
+
+    #[test]
+    fn serialize_value_fn() {
+        let r = serialize_value(b"a+b-c.d/e:f@g]h_i09").unwrap();
         assert!(matches!(r, Cow::Borrowed(_)));
 
         assert_eq!(s(b""), b"''");
@@ -1022,7 +1155,7 @@ mod tests {
 
         assert_eq!(s(b"it's\nmore"), b"'it'\\''s\nmore'");
 
-        assert!(matches!(serialize_line(b"a\0b"), Err(Error::NullByte)));
-        assert!(matches!(serialize_line(b"a b\0"), Err(Error::NullByte)));
+        assert!(matches!(serialize_value(b"a\0b"), Err(SerError::NullByte)));
+        assert!(matches!(serialize_value(b"a b\0"), Err(SerError::NullByte)));
     }
 }

@@ -6,18 +6,21 @@ extern crate core as std;
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
-mod de;
+//mod de;
 mod error;
 mod ser;
 
 pub use crate::{
-    de::{Deserializer, from_str},
-    error::Error,
+    // de::{Deserializer, from_str},
+    error::SerError,
     ser::{
-        Serializer, to_string_compact_posix, to_string_pretty_posix, to_vec_compact_posix,
-        to_vec_pretty_posix, to_writer_compact_posix, to_writer_pretty_posix,
+        BashCompactFormatter, BashPrettyFormatter, Formatter, PosixCompactFormatter,
+        PosixPrettyFormatter, Serializer, to_string, to_vec, to_writer,
     },
 };
 
-// #[cfg(feature = "std")]
-// compile_error!("");
+#[cfg(all(feature = "std", feature = "no_std"))]
+compile_error!("`std` and `no_std` are mutually exclusive");
+
+#[cfg(not(any(feature = "std", feature = "no_std")))]
+compile_error!("must enable either `std` or `no_std`");

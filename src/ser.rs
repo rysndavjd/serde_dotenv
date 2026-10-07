@@ -48,7 +48,7 @@ fn validate_key(key: &str) -> Result<&str, SerError> {
 /// specification loosely.
 ///
 /// [POSIX specification](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html)
-fn serialize_value<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, SerError> {
+fn serialize_value<'a>(val: &'a [u8], escape: bool) -> Result<Cow<'a, [u8]>, SerError> {
     if val.is_empty() {
         return Ok(Cow::Borrowed(b"''"));
     }
@@ -81,7 +81,13 @@ fn serialize_value<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, SerError> {
 
     let mut output: Vec<u8> = Vec::new();
 
-    output.push(b'\'');
+    if escape {
+        for c in b"'\\''" {
+            output.push(*c);
+        }
+    } else {
+        output.push(b'\'');
+    }
     for c in val {
         if *c == b'\'' {
             for c in b"'\\''" {
@@ -91,7 +97,13 @@ fn serialize_value<'a>(val: &'a [u8]) -> Result<Cow<'a, [u8]>, SerError> {
             output.push(*c);
         }
     }
-    output.push(b'\'');
+    if escape {
+        for c in b"'\\''" {
+            output.push(*c);
+        }
+    } else {
+        output.push(b'\'');
+    }
 
     Ok(Cow::Owned(output))
 }
@@ -353,6 +365,7 @@ where
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.ser.in_seq = false;
         self.ser.formatter.end_seq(&mut self.ser.writer)
     }
 }
@@ -401,6 +414,7 @@ where
 pub struct Serializer<W, F> {
     writer: W,
     formatter: F,
+    in_seq: bool,
 }
 
 impl<W> Serializer<W, PosixCompactFormatter>
@@ -457,7 +471,11 @@ where
     /// Creates a serializer that writes to `writer` using [`Formatter`].
     #[inline]
     pub fn with_formatter(writer: W, formatter: F) -> Self {
-        Serializer { writer, formatter }
+        Serializer {
+            writer,
+            formatter,
+            in_seq: false,
+        }
     }
 
     /// Consumes the serializer and returns the underlying writer.
@@ -573,13 +591,14 @@ where
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        let value = serialize_value(v)?;
+        let escape = self.in_seq && self.formatter.escape_seq();
+        let value = serialize_value(v, escape)?;
         self.writer.write_all(value.as_ref())?;
         Ok(())
     }
 
     fn serialize_none(self) -> Result<(), Self::Error> {
-        self.serialize_unit()
+        self.formatter.write_none(&mut self.writer)
     }
 
     fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
@@ -590,7 +609,7 @@ where
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        Ok(())
+        self.formatter.write_unit(&mut self.writer)
     }
 
     fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Self::Error> {
@@ -631,7 +650,13 @@ where
     }
 
     fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        if self.in_seq {
+            // Serializing a sequence within a sequence is unsupported
+            return Err(SerError::UnsupportedSerialization);
+        }
+        self.in_seq = true;
         self.formatter.begin_seq(&mut self.writer)?;
+
         Ok(Compound {
             ser: self,
             first: true,
@@ -687,6 +712,24 @@ where
 }
 
 pub trait Formatter {
+    #[inline]
+    fn write_none<W>(&mut self, writer: &mut W) -> Result<(), SerError>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b"None")?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_unit<W>(&mut self, writer: &mut W) -> Result<(), SerError>
+    where
+        W: ?Sized + Write,
+    {
+        writer.write_all(b"Unit")?;
+        Ok(())
+    }
+
     /// Writes a `true` or `false` value to the specified writer.
     #[inline]
     fn write_bool<W>(&mut self, writer: &mut W, v: bool) -> Result<(), SerError>
@@ -877,6 +920,11 @@ pub trait Formatter {
         Ok(())
     }
 
+    #[inline]
+    fn escape_seq(&self) -> bool {
+        true
+    }
+
     /// Writes the text that opens a sequence, before the first element.
     ///
     /// # Example
@@ -948,6 +996,11 @@ impl Formatter for PosixCompactFormatter {}
 pub struct BashCompactFormatter;
 
 impl Formatter for BashCompactFormatter {
+    #[inline]
+    fn escape_seq(&self) -> bool {
+        false
+    }
+
     fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
     where
         W: ?Sized + Write,
@@ -992,6 +1045,11 @@ impl Formatter for BashPrettyFormatter {
         writer.write_all(b"\n")?;
 
         Ok(())
+    }
+
+    #[inline]
+    fn escape_seq(&self) -> bool {
+        false
     }
 
     fn begin_seq<W>(&mut self, writer: &mut W) -> Result<(), SerError>
@@ -1116,33 +1174,40 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::f64::consts::PI;
+
     use super::*;
     use alloc::borrow::Cow;
 
-    fn s(input: &[u8]) -> Vec<u8> {
-        serialize_value(input).unwrap().into_owned()
+    #[test]
+    fn validate_key_fn_valid() {
+        assert_eq!(validate_key("key"), Ok("key"));
+        assert_eq!(validate_key("_unused"), Ok("_unused"));
+        assert_eq!(validate_key("Object_Type1"), Ok("Object_Type1"));
     }
 
     #[test]
-    fn validate_key_fn() {
-        assert!(validate_key("a").is_ok());
-        assert!(validate_key("_a1").is_ok());
-        assert!(validate_key("A_b9").is_ok());
-        assert!(validate_key("").is_err());
-        assert!(validate_key("1a").is_err());
-        assert!(validate_key("-a").is_err());
-        assert!(validate_key("é").is_err());
-        assert!(validate_key("a b").is_err());
-        assert!(validate_key("a=b").is_err());
+    fn validate_key_fn_invalid() {
+        assert_eq!(validate_key(""), Err(SerError::EmptyKey));
+        assert_eq!(validate_key("1a"), Err(SerError::KeyStartsWithDigit));
+        assert_eq!(validate_key("-a"), Err(SerError::InvalidKey));
+        assert_eq!(validate_key("é"), Err(SerError::InvalidKey));
+        assert_eq!(validate_key("a b"), Err(SerError::InvalidKey));
+        assert_eq!(validate_key("a=b"), Err(SerError::InvalidKey));
     }
 
     #[test]
-    fn serialize_value_fn() {
-        let r = serialize_value(b"a+b-c.d/e:f@g]h_i09").unwrap();
+    fn serialize_value_fn_valid() {
+        fn s(input: &[u8]) -> Vec<u8> {
+            serialize_value(input, false).unwrap().into_owned()
+        }
+
+        let r = serialize_value(b"a+b-c.d/e:f@g]h_i09", false).unwrap();
         assert!(matches!(r, Cow::Borrowed(_)));
 
         assert_eq!(s(b""), b"''");
-
+        assert_eq!(s(b"test"), b"test");
+        assert_eq!(s(b"121"), b"121");
         assert_eq!(s(b"hello world"), b"'hello world'");
         assert_eq!(s(b"$HOME"), b"'$HOME'");
         assert_eq!(s(b"a\\b"), b"'a\\b'");
@@ -1152,10 +1217,73 @@ mod tests {
         assert_eq!(s(b"it's $5"), b"'it'\\''s $5'");
         assert_eq!(s(b"it's a\\b"), b"'it'\\''s a\\b'");
         assert_eq!(s(b"it's \"x\""), b"'it'\\''s \"x\"'");
-
         assert_eq!(s(b"it's\nmore"), b"'it'\\''s\nmore'");
+    }
 
-        assert!(matches!(serialize_value(b"a\0b"), Err(SerError::NullByte)));
-        assert!(matches!(serialize_value(b"a b\0"), Err(SerError::NullByte)));
+    #[test]
+    fn serialize_value_fn_invalid() {
+        assert!(matches!(
+            serialize_value(b"a\0b", false),
+            Err(SerError::NullByte)
+        ));
+        assert!(matches!(
+            serialize_value(b"a b\0", false),
+            Err(SerError::NullByte)
+        ));
+    }
+
+    #[derive(serde::Serialize)]
+    struct ValidExample {
+        unit: (),
+        option_none: Option<()>,
+        integer: u64,
+        float: f64,
+        string: String,
+        numbers: Vec<u8>,
+        strings: Vec<&'static str>,
+    }
+
+    fn valid_example() -> ValidExample {
+        ValidExample {
+            unit: (),
+            option_none: None,
+            integer: 256,
+            float: PI,
+            string: String::from("Example"),
+            numbers: [10, 5, 64].to_vec(),
+            strings: ["\"Non Nested\"", "String", "Are working", "'¯\\_(ツ)_/¯'"].to_vec(),
+        }
+    }
+
+    #[test]
+    fn posix_compact() {
+        assert_eq!(
+            to_string(PosixCompactFormatter, &valid_example()).unwrap(),
+            "unit=Unit option_none=None integer=256 float=3.141592653589793 string=Example numbers='10 5 64' strings=''\\''\"Non Nested\"'\\'' String '\\''Are working'\\'' '\\'''\\''¯\\_(ツ)_/¯'\\'''\\'''"
+        );
+    }
+
+    #[test]
+    fn posix_pretty() {
+        assert_eq!(
+            to_string(PosixPrettyFormatter, &valid_example()).unwrap(),
+            "unit=Unit\noption_none=None\ninteger=256\nfloat=3.141592653589793\nstring=Example\nnumbers='10 5 64'\nstrings=''\\''\"Non Nested\"'\\'' String '\\''Are working'\\'' '\\'''\\''¯\\_(ツ)_/¯'\\'''\\'''"
+        );
+    }
+
+    #[test]
+    fn bash_compact() {
+        assert_eq!(
+            to_string(BashCompactFormatter, &valid_example()).unwrap(),
+            "unit=Unit option_none=None integer=256 float=3.141592653589793 string=Example numbers=(10 5 64) strings=('\"Non Nested\"' String 'Are working' ''\\''¯\\_(ツ)_/¯'\\''')"
+        );
+    }
+
+    #[test]
+    fn bash_pretty() {
+        assert_eq!(
+            to_string(BashPrettyFormatter, &valid_example()).unwrap(),
+            "unit=Unit\noption_none=None\ninteger=256\nfloat=3.141592653589793\nstring=Example\nnumbers=(10 5 64)\nstrings=('\"Non Nested\"' String 'Are working' ''\\''¯\\_(ツ)_/¯'\\''')"
+        );
     }
 }
